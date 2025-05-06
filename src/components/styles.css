@@ -484,6 +484,63 @@
     border-right: 0;
   }
   
+  /* Style for microphone button */
+  .btn-outline-secondary.btn-mic {
+    border-right: 0;
+  }
+  
+  .btn-mic .fa-microphone {
+    color: #dc3545;
+  }
+  
+  .btn-mic.btn-danger .fa-stop {
+    color: white;
+  }
+  
+  .btn-mic.btn-danger {
+    animation: pulse 1.5s infinite;
+  }
+  
+  /* Style for the speech button in messages */
+  .message .btn-sm {
+    opacity: 0.7;
+    transition: all 0.2s;
+  }
+  
+  .message .btn-sm:hover {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+  
+  .message .btn-sm.btn-danger {
+    animation: pulse 1.5s infinite;
+  }
+  
+  /* Animation pour le message en cours de lecture */
+  .message.currently-speaking {
+    border-left: 4px solid var(--accent-color) !important;
+    box-shadow: 0 0 15px rgba(255, 64, 129, 0.3) !important;
+    animation: speaking-glow 2s infinite alternate;
+  }
+  
+  @keyframes speaking-glow {
+    from {
+      box-shadow: 0 0 5px rgba(255, 64, 129, 0.3);
+    }
+    to {
+      box-shadow: 0 0 15px rgba(255, 64, 129, 0.7);
+    }
+  }
+  
+  .speaking-indicator {
+    color: var(--accent-color);
+    font-size: 0.9em;
+  }
+  
+  .fa-pulse {
+    animation: pulse 1s infinite;
+  }
+  
   .btn-outline-secondary:hover {
     background-color: var(--primary-color);
     border-color: var(--primary-color);
@@ -499,4 +556,109 @@
   
   .message-image img:active {
     animation: zoomIn 0.3s ease-in-out;
+  }
+  
+  /* Barre de progression de la lecture vocale */
+  .speech-progress {
+    opacity: 0.8;
+    transition: opacity 0.2s;
+  }
+  
+  .speech-progress:hover {
+    opacity: 1;
+  }
+  
+  .progress-bar.bg-accent {
+    background-color: var(--accent-color) !important;
+    box-shadow: 0 0 5px var(--accent-color);
+    animation: progress-pulse 1.5s infinite alternate;
+  }
+  
+  .speech-status {
+    font-size: 0.8rem;
+    color: var(--accent-color) !important;
+    animation: pulse 1.5s infinite;
+  }
+  
+  /* Styles pour le panneau de paramètres vocaux */
+  .voice-settings {
+    max-width: 600px;
+    margin: 0 auto;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.15);
+    border: 2px solid var(--accent-color);
+    background-color: #fff;
+    border-radius: 10px;
+    position: relative;
+    z-index: 10;
+    animation: fadeInDown 0.3s ease-out;
+  }
+  
+  @keyframes fadeInDown {
+    from {
+      opacity: 0;
+      transform: translateY(-20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  
+  .voice-settings h6 {
+    color: var(--accent-color);
+    border-bottom: 1px solid #eee;
+    padding-bottom: 8px;
+  }
+  
+  .voice-settings .form-range::-webkit-slider-thumb {
+    background: var(--accent-color);
+  }
+  
+  .voice-settings .form-range::-moz-range-thumb {
+    background: var(--accent-color);
+  }
+  
+  .voice-settings .form-check-input:checked {
+    background-color: var(--accent-color);
+    border-color: var(--accent-color);
+  }
+  
+  @keyframes progress-pulse {
+    from {
+      opacity: 0.7;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  
+  /* Styles pour les contrôles de lecture vocale */
+  .message-actions {
+    display: flex;
+    align-items: center;
+  }
+  
+  .message-actions .btn-xs {
+    padding: 0.1rem 0.3rem;
+    font-size: 0.7rem;
+  }
+  
+  .message-actions .btn-group {
+    opacity: 0.6;
+    transition: opacity 0.2s ease;
+  }
+  
+  .message-actions .btn-group:hover {
+    opacity: 1;
+  }
+  
+  .speech-status {
+    font-size: 0.8rem;
+    color: var(--accent-color) !important;
+    animation: pulse 1.5s infinite;
+  }
+  
+  .speech-status .badge {
+    font-size: 0.65rem;
+    padding: 0.2em 0.5em;
   }

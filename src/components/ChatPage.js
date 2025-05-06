@@ -40,8 +40,17 @@ const safeCheckBrowserCapabilities = () => {
       console.error('Erreur lors de la vérification de Blob:', e);
     }
     
+    // Vérification de la prise en charge de la synthèse vocale
+    const hasSpeechSynthesis = typeof window !== 'undefined' && 'speechSynthesis' in window;
+    
+    // Vérification de la prise en charge de la reconnaissance vocale
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const hasSpeechRecognition = typeof SpeechRecognition !== 'undefined';
+    
     return {
       hasFileSupport: hasBasicFeatures && hasBlobSupport,
+      hasSpeechSynthesis,
+      hasSpeechRecognition,
       browserInfo: {
         name: navigator?.userAgent?.match(/chrome|chromium|crios/i) ? 'Chrome' :
               navigator?.userAgent?.match(/firefox|fxios/i) ? 'Firefox' :
@@ -53,13 +62,18 @@ const safeCheckBrowserCapabilities = () => {
     };
   } catch (e) {
     console.error('Erreur lors de la vérification du navigateur:', e);
-    return { hasFileSupport: false, browserInfo: { name: 'Erreur', version: 'Erreur' } };
+    return { 
+      hasFileSupport: false, 
+      hasSpeechSynthesis: false,
+      hasSpeechRecognition: false,
+      browserInfo: { name: 'Erreur', version: 'Erreur' } 
+    };
   }
 };
 
 const ChatPage = () => {
   // Vérification initiale sécurisée
-  const { hasFileSupport, browserInfo } = safeCheckBrowserCapabilities();
+  const { hasFileSupport, hasSpeechSynthesis, hasSpeechRecognition, browserInfo } = safeCheckBrowserCapabilities();
   
   const [messages, setMessages] = useState([
     {
@@ -84,6 +98,40 @@ const ChatPage = () => {
   const fileInputRef = useRef(null);
   const [isFileUploadEnabled] = useState(hasFileSupport);
   const [browserDetails] = useState(browserInfo);
+  
+  // Variables d'état pour la reconnaissance vocale et la synthèse vocale
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [currentSpeakingMessageId, setCurrentSpeakingMessageId] = useState(null);
+  const [speakingProgress, setSpeakingProgress] = useState(0); // progression de 0 à 100
+  const [isSpeechSynthesisSupported] = useState(hasSpeechSynthesis);
+  const [isSpeechRecognitionSupported] = useState(hasSpeechRecognition);
+  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
+  const [voicePrefs, setVoicePrefs] = useState({
+    rate: 0.92,      // Vitesse de lecture (0.1 à 2)
+    pitch: 1.0,      // Ton de la voix (0 à 2)
+    volume: 1.0,     // Volume (0 à 1)
+    useSegmentation: true // Utiliser la segmentation pour une meilleure fiabilité
+  });
+  const recognitionRef = useRef(null);
+  const speechSynthesisRef = useRef(hasSpeechSynthesis ? window.speechSynthesis : null);
+
+  // Référence pour l'intervalle de vérification de la synthèse vocale
+  const checkIntervalRef = useRef(null);
+
+  // Variable d'état pour suivre les interruptions externes
+  const [isCancellationRequested, setIsCancellationRequested] = useState(false);
+  const activeSpeechRef = useRef({
+    isActive: false,
+    messageId: null,
+    segments: [],
+    currentSegment: 0,
+    totalSegments: 0
+  });
+
+  // Ajouter des références pour suivre l'état actuel immédiatement
+  const isSpeakingRef = useRef(false);
+  const cancelRequestedRef = useRef(false);
 
   // useEffect pour les avertissements si nécessaire
   useEffect(() => {
@@ -91,7 +139,70 @@ const ChatPage = () => {
       console.warn("Ce navigateur ne prend pas en charge toutes les fonctionnalités nécessaires pour l'upload d'images.");
       setError(`L'upload d'images n'est pas disponible sur ce navigateur. Si cette fonctionnalité est importante, essayez d'utiliser Chrome, Firefox ou Edge.`);
     }
-  }, [isFileUploadEnabled]);
+    
+    if (!isSpeechSynthesisSupported) {
+      console.warn("Ce navigateur ne prend pas en charge la synthèse vocale.");
+    }
+    
+    if (!isSpeechRecognitionSupported) {
+      console.warn("Ce navigateur ne prend pas en charge la reconnaissance vocale.");
+    }
+  }, [isFileUploadEnabled, isSpeechSynthesisSupported, isSpeechRecognitionSupported]);
+
+  // Corriger le problème de context suspendu de speechSynthesis dans certains navigateurs
+  useEffect(() => {
+    const fixSpeechSynthesis = () => {
+      if (isSpeechSynthesisSupported) {
+        // Certains navigateurs suspendent speechSynthesis quand la page devient inactive
+        if (speechSynthesisRef.current && speechSynthesisRef.current.paused && !isCancellationRequested) {
+          console.log("Détection de synthèse vocale en pause, tentative de reprise...");
+          speechSynthesisRef.current.resume();
+        }
+      }
+    };
+
+    // Ajouter des écouteurs d'événements pour détecter les changements de visibilité
+    document.addEventListener('visibilitychange', fixSpeechSynthesis);
+    window.addEventListener('focus', fixSpeechSynthesis);
+    window.addEventListener('blur', fixSpeechSynthesis);
+
+    // Intervalles de vérification et correction pour les navigateurs problématiques
+    const resumeInterval = setInterval(() => {
+      if (isSpeaking && !isCancellationRequested) {
+        fixSpeechSynthesis();
+      }
+    }, 1000);
+
+    return () => {
+      document.removeEventListener('visibilitychange', fixSpeechSynthesis);
+      window.removeEventListener('focus', fixSpeechSynthesis);
+      window.removeEventListener('blur', fixSpeechSynthesis);
+      clearInterval(resumeInterval);
+    };
+  }, [isSpeaking, isSpeechSynthesisSupported, isCancellationRequested]);
+
+  // useEffect pour vérifier périodiquement si la synthèse vocale est toujours active
+  useEffect(() => {
+    let checkInterval;
+    
+    if (isSpeaking) {
+      // Vérifier toutes les 500ms si la synthèse vocale est toujours active
+      checkInterval = setInterval(() => {
+        if (speechSynthesisRef.current && !speechSynthesisRef.current.speaking) {
+          // Si la synthèse vocale s'est arrêtée sans déclencher onend
+          setIsSpeaking(false);
+          setCurrentSpeakingMessageId(null);
+          setSpeakingProgress(0);
+        }
+      }, 500);
+    }
+    
+    return () => {
+      if (checkInterval) {
+        clearInterval(checkInterval);
+      }
+    };
+  }, [isSpeaking]);
 
   const scrollToBottom = () => {
     try {
@@ -277,6 +388,767 @@ const ChatPage = () => {
     }
   };
 
+  // Fonction pour lire à haute voix un message
+  const handleSpeakMessage = (text, messageId) => {
+    if (!isSpeechSynthesisSupported) {
+      setError('La synthèse vocale n\'est pas prise en charge par votre navigateur. Essayez Chrome ou Edge.');
+      return;
+    }
+    
+    if (isSpeaking) {
+      // Ajout d'un log pour identifier d'où vient l'annulation
+      console.log("Annulation demandée de la lecture en cours. Source: handleSpeakMessage");
+      
+      // Marquer comme une annulation explicite de l'utilisateur
+      setIsCancellationRequested(true);
+      cancelRequestedRef.current = true;
+      
+      // Arrêter la lecture en cours
+      try {
+        speechSynthesisRef.current.cancel();
+        console.log("Annulation réussie de la synthèse vocale");
+      } catch (err) {
+        console.error("Erreur lors de l'annulation de la synthèse vocale:", err);
+      }
+      
+      setIsSpeaking(false);
+      isSpeakingRef.current = false;
+      setCurrentSpeakingMessageId(null);
+      setSpeakingProgress(0);
+      
+      // Réinitialiser la référence de suivi
+      activeSpeechRef.current = {
+        isActive: false,
+        messageId: null,
+        segments: [],
+        currentSegment: 0,
+        totalSegments: 0
+      };
+      
+      if (checkIntervalRef.current) clearInterval(checkIntervalRef.current);
+      
+      // Réinitialiser l'état d'annulation après un court délai
+      setTimeout(() => {
+        setIsCancellationRequested(false);
+        cancelRequestedRef.current = false;
+        console.log("État d'annulation réinitialisé");
+      }, 500);
+      
+      return;
+    }
+    
+    // Initialiser l'état de lecture immédiatement avec les références
+    setIsSpeaking(true);
+    isSpeakingRef.current = true;
+    setCurrentSpeakingMessageId(messageId);
+    setIsCancellationRequested(false);
+    cancelRequestedRef.current = false;
+    
+    try {
+      // Force activer l'audio sur l'appareil avec un son silencieux
+      // Cela est nécessaire sur certains navigateurs/appareils
+      try {
+        // Créer un court son pour activer l'audio du système
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        
+        // Configurer un son très court et à peine audible
+        gainNode.gain.value = 0.05; // Volume suffisant pour activer l'audio
+        oscillator.frequency.value = 440; // Fréquence audible (La 440Hz)
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        
+        // Jouer le son pendant 100ms
+        oscillator.start();
+        setTimeout(() => {
+          oscillator.stop();
+          audioContext.close().catch(err => console.log("Erreur fermeture audio:", err));
+        }, 100);
+        
+        // Forcer le déverrouillage des contrôles audio sur iOS et Safari
+        if (typeof document !== 'undefined') {
+          const unlockAudio = () => {
+            if (audioContext.state === 'suspended') {
+              audioContext.resume().then(() => {
+                console.log('Audio context déverrouillé avec succès');
+              }).catch(err => {
+                console.warn('Échec du déverrouillage audio:', err);
+              });
+            }
+          };
+          
+          // Attacher des écouteurs d'événements temporaires pour le déverrouillage
+          const events = ['touchstart', 'touchend', 'mousedown', 'keydown'];
+          const cleanupFuncs = events.map(event => {
+            const handler = unlockAudio;
+            document.addEventListener(event, handler, { once: true });
+            return () => document.removeEventListener(event, handler);
+          });
+          
+          // Nettoyer les écouteurs après 5 secondes
+          setTimeout(() => {
+            cleanupFuncs.forEach(cleanup => cleanup());
+          }, 5000);
+        }
+      } catch (err) {
+        console.warn("Impossible d'activer l'audio du système:", err);
+        // On continue malgré l'erreur, car cela pourrait quand même fonctionner
+      }
+      
+      // Nettoyer le texte pour la synthèse vocale
+      // 1. Supprimer les balises HTML et entités HTML
+      let cleanText = text.replace(/<\/?[^>]+(>|$)/g, " ");
+      cleanText = cleanText.replace(/&[a-z]+;/g, " ");
+      
+      // 2. Remplacer les caractères spéciaux de formatage par des espaces
+      cleanText = cleanText.replace(/[\*_\[\]\(\)\{\}\#\+\~\`]/g, " ");
+      
+      // 3. Conserver la ponctuation essentielle et les accents pour une lecture correcte
+      cleanText = cleanText.replace(/[^\w\s.,!?;:«»""''\-–—àâäéèêëîïôöùûüÿçÀÂÄÉÈÊËÎÏÔÖÙÛÜŸÇ]/g, " ");
+      
+      // 4. Supprimer les espaces multiples et les espaces avant la ponctuation
+      cleanText = cleanText.replace(/\s+/g, " ");
+      cleanText = cleanText.replace(/\s+([.,!?;:])/g, "$1");
+      cleanText = cleanText.trim();
+      
+      // 5. Améliorations spécifiques pour la lecture
+      // Ajouter une pause après les points pour une meilleure séparation
+      cleanText = cleanText.replace(/\./g, ". ");
+      // Ajouter une pause après les questions/exclamations
+      cleanText = cleanText.replace(/[!?]/g, "$& ");
+      
+      console.log("Texte original:", text);
+      console.log("Texte nettoyé pour lecture:", cleanText);
+      
+      // Marquer le message comme "en cours de lecture"
+      setIsSpeaking(true);
+      isSpeakingRef.current = true;
+      setCurrentSpeakingMessageId(messageId);
+      setSpeakingProgress(0);
+      
+      // Annuler toute lecture précédente
+      speechSynthesisRef.current.cancel();
+      
+      // Obtenir les voix disponibles
+      const getVoices = () => {
+        // Récupérer les voix disponibles
+        const voices = speechSynthesisRef.current.getVoices();
+        
+        // Chercher une voix française
+        let frenchVoice = null;
+        
+        for (const voice of voices) {
+          // Priorité aux voix françaises
+          if (voice.lang.includes('fr') || voice.lang.includes('FR')) {
+            frenchVoice = voice;
+            // Priorité aux voix féminines pour plus de clarté
+            if (voice.name.includes('female') || voice.name.toLowerCase().includes('femme')) {
+              break;
+            }
+          }
+        }
+        
+        return frenchVoice;
+      };
+      
+      // Solution par lecture de segments courts pour garantir que tout le texte est lu
+      const readTextInSegments = () => {
+        // Diviser le texte en segments plus courts et gérables
+        const words = cleanText.split(/\s+/);
+        let segments = [];
+        
+        // Détecter le navigateur pour adapter les stratégies
+        const isEdge = navigator.userAgent.indexOf("Edg") > -1;
+        const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+        
+        // Adapter la longueur des segments selon le navigateur
+        const wordsPerSegment = (isEdge || isSafari) ? 5 : 7; // Segments encore plus courts pour Edge et Safari
+        
+        console.log("Navigateur détecté:", isEdge ? "Edge" : isSafari ? "Safari" : "Autre", "- Segments de", wordsPerSegment, "mots");
+        
+        // Diviser le texte en segments
+        for (let i = 0; i < words.length; i += wordsPerSegment) {
+          const segmentCandidate = words.slice(i, i + wordsPerSegment).join(" ").trim();
+          // N'ajouter que les segments non vides
+          if (segmentCandidate) {
+            segments.push(segmentCandidate);
+          }
+        }
+        
+        console.log("Segments à lire:", segments.length, segments);
+        
+        // Le nombre total de segments pour calculer la progression
+        const totalSegments = segments.length;
+        
+        // Mettre à jour la référence de suivi
+        activeSpeechRef.current = {
+          isActive: true,
+          messageId: messageId,
+          segments: segments,
+          currentSegment: 0,
+          totalSegments: totalSegments,
+          lastActivity: Date.now()
+        };
+        
+        // Réinitialiser l'état d'annulation
+        setIsCancellationRequested(false);
+        
+        // Fonction pour lire chaque segment séquentiellement
+        const readNextSegment = (index = 0) => {
+          // Vérifier si la lecture doit se poursuivre en utilisant les références
+          if (cancelRequestedRef.current || !isSpeakingRef.current || index >= totalSegments) {
+            console.log("Lecture terminée ou annulée. isSpeaking:", isSpeakingRef.current, "isCancellationRequested:", cancelRequestedRef.current, "index:", index, "totalSegments:", totalSegments);
+            
+            // Ne pas modifier l'état si une annulation explicite a déjà été effectuée
+            if (!cancelRequestedRef.current) {
+              setIsSpeaking(false);
+              isSpeakingRef.current = false;
+              setCurrentSpeakingMessageId(null);
+              setSpeakingProgress(100);
+            }
+            
+            // Mettre à jour la référence de suivi
+            activeSpeechRef.current.isActive = false;
+            activeSpeechRef.current.currentSegment = 0;
+            
+            if (checkIntervalRef.current) clearInterval(checkIntervalRef.current);
+            return;
+          }
+          
+          // Mettre à jour la progression
+          const progress = Math.floor((index / totalSegments) * 100);
+          setSpeakingProgress(progress);
+          
+          // Mettre à jour le segment en cours dans la référence
+          activeSpeechRef.current.currentSegment = index;
+          
+          // Créer l'utterance pour ce segment
+          const utterance = new SpeechSynthesisUtterance(segments[index]);
+          
+          // Base configuration pour tous les navigateurs
+          utterance.lang = 'fr-FR';
+          
+          // Récupérer une voix française si disponible
+          const frenchVoice = getVoices();
+          if (frenchVoice) {
+            utterance.voice = frenchVoice;
+          } else {
+            // Si aucune voix française n'est trouvée, on force la langue
+            utterance.lang = 'fr-FR';
+          }
+          
+          // Détecter le navigateur pour adapter les stratégies
+          const isEdge = navigator.userAgent.indexOf("Edg") > -1;
+          const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+          
+          // Appliquer les préférences utilisateur avec volume maximisé
+          utterance.rate = voicePrefs.rate;
+          if (isEdge || isSafari) {
+            // Edge et Safari ont des problèmes avec certains taux de lecture
+            utterance.rate = Math.min(Math.max(voicePrefs.rate, 0.7), 1.1); // Restreindre la plage
+          }
+          
+          utterance.pitch = voicePrefs.pitch;
+          utterance.volume = 1.0; // Toujours volume maximum pour éviter les problèmes d'audio
+          
+          // Dans Safari, utiliser une pause plus longue entre les segments
+          const pauseDuration = isSafari ? 300 : isEdge ? 200 : 150;
+          
+          console.log(`Lecture du segment ${index + 1}/${totalSegments}: "${segments[index]}"`);
+          
+          // Gérer la fin de la lecture d'un segment
+          utterance.onstart = () => {
+            console.log(`Début de lecture du segment ${index + 1}`);
+            activeSpeechRef.current.lastActivity = Date.now();
+          };
+          
+          utterance.onend = () => {
+            console.log(`Fin du segment ${index + 1}, isSpeaking:`, isSpeakingRef.current);
+            
+            // Si l'état a changé entretemps, gérer proprement l'arrêt
+            if (!isSpeakingRef.current) {
+              console.log(`Le segment ${index + 1} s'est terminé mais la lecture a été annulée entre-temps`);
+              return;
+            }
+            
+            // Petite pause avant le prochain segment pour une meilleure fluidité
+            const timeoutId = setTimeout(() => {
+              // Double vérification pour éviter des appels après annulation
+              if (isSpeakingRef.current && !cancelRequestedRef.current) {
+                // Vérifier que la référence est toujours valide
+                if (activeSpeechRef.current.isActive && activeSpeechRef.current.messageId === messageId) {
+                  try {
+                    readNextSegment(index + 1);
+                  } catch (err) {
+                    console.error(`Erreur lors de la lecture du segment ${index + 1}:`, err);
+                    // Tenter de continuer malgré l'erreur après un délai plus long
+                    setTimeout(() => {
+                      if (isSpeakingRef.current && !cancelRequestedRef.current) {
+                        try {
+                          readNextSegment(index + 1);
+                        } catch (e) {
+                          console.error("Deuxième échec de lecture:", e);
+                          setIsSpeaking(false);
+                          isSpeakingRef.current = false;
+                          setError("Impossible de continuer la lecture après plusieurs tentatives.");
+                        }
+                      }
+                    }, 1000);
+                  }
+                } else {
+                  console.log("La référence de suivi a changé, arrêt de la séquence de lecture");
+                }
+              } else {
+                console.log("La lecture a été annulée pendant la pause entre segments");
+              }
+            }, pauseDuration);
+            
+            // Stocker l'ID du timeout pour pouvoir l'annuler si nécessaire
+            const timeouts = activeSpeechRef.current.timeouts || [];
+            activeSpeechRef.current.timeouts = [...timeouts, timeoutId];
+          };
+          
+          // Gérer les erreurs lors de la lecture d'un segment
+          utterance.onerror = (event) => {
+            console.error("Erreur de lecture pour le segment", index, event);
+            console.log("Type d'erreur:", event.error, "Message:", event.message);
+            
+            // Si c'est l'erreur "canceled", possiblement due à une annulation directe
+            if (event.error === 'canceled' || event.error === 'interrupted') {
+              console.log("Annulation détectée, vérification si elle était intentionnelle...");
+              
+              // Si ce n'était pas une annulation explicite, tenter de récupérer
+              if (!cancelRequestedRef.current && isSpeakingRef.current) {
+                console.log("Annulation non intentionnelle détectée, tentative de reprise...");
+                
+                // Attendre un peu plus longtemps avant de réessayer
+                setTimeout(() => {
+                  if (isSpeakingRef.current && !cancelRequestedRef.current) {
+                    // Continuer avec le segment actuel ou le suivant selon le contexte
+                    try {
+                      readNextSegment(index);
+                    } catch (err) {
+                      console.error("Impossible de reprendre après annulation:", err);
+                    }
+                  }
+                }, 800);
+              } else {
+                console.log("Annulation intentionnelle confirmée, arrêt de la lecture");
+              }
+              return;
+            }
+            
+            // Pour les autres types d'erreurs, continuer avec le segment suivant
+            if (isSpeakingRef.current && !cancelRequestedRef.current) {
+              console.warn(`Erreur, passage au segment ${index + 2}`);
+              setTimeout(() => {
+                if (isSpeakingRef.current && !cancelRequestedRef.current) {
+                  try {
+                    readNextSegment(index + 1);
+                  } catch (err) {
+                    console.error("Impossible de continuer après erreur:", err);
+                  }
+                }
+              }, pauseDuration * 2); // Pause plus longue après une erreur
+            }
+          };
+          
+          // Lire le segment
+          speechSynthesisRef.current.speak(utterance);
+          
+          // Force le navigateur à jouer le son immédiatement
+          if (!speechSynthesisRef.current.speaking) {
+            speechSynthesisRef.current.pause();
+            speechSynthesisRef.current.resume();
+          }
+        };
+        
+        // Commencer la lecture séquentielle
+        if (segments.length > 0) {
+          // S'assurer que l'état est initialisé AVANT le setTimeout
+          // Utiliser des références pour un accès immédiat
+          
+          // Affirmer explicitement l'état de lecture avant le timeout
+          if (!isSpeakingRef.current) {
+            console.log("Initialisation explicite de l'état de lecture");
+            setIsSpeaking(true);
+            isSpeakingRef.current = true;
+            setCurrentSpeakingMessageId(messageId);
+          }
+          
+          // Réinitialiser explicitement l'état d'annulation
+          if (cancelRequestedRef.current) {
+            console.log("Réinitialisation de l'état d'annulation avant démarrage");
+            setIsCancellationRequested(false);
+            cancelRequestedRef.current = false;
+          }
+          
+          // Attendre un court instant avant de démarrer la lecture
+          console.log("Programmation du démarrage de lecture dans 300ms");
+          setTimeout(() => {
+            // Double vérification explicite de l'état en utilisant les références
+            console.log("Vérification avant démarrage - isSpeaking:", isSpeakingRef.current, "isCancellationRequested:", cancelRequestedRef.current);
+            
+            // Vérifier que la lecture n'a pas été annulée entre-temps
+            if (!isSpeakingRef.current) {
+              console.log("État de lecture non défini, définition explicite");
+              setIsSpeaking(true);
+              isSpeakingRef.current = true;
+              setCurrentSpeakingMessageId(messageId);
+            }
+            
+            if (cancelRequestedRef.current) {
+              console.log("Annulation demandée pendant l'initialisation, abandon");
+              setIsSpeaking(false);
+              isSpeakingRef.current = false;
+              console.log("La lecture a été annulée avant le début de la séquence");
+            } else {
+              // Vérifier explicitement que la synthèse vocale est disponible
+              if (speechSynthesisRef.current) {
+                console.log("Synthèse vocale disponible, démarrage de la lecture");
+                try {
+                  readNextSegment(0);
+                } catch (err) {
+                  console.error("Erreur au démarrage de la lecture:", err);
+                  setIsSpeaking(false);
+                  isSpeakingRef.current = false;
+                  setError("Impossible de démarrer la lecture vocale: " + (err.message || "erreur inconnue"));
+                }
+              } else {
+                console.error("Référence à la synthèse vocale perdue, tentative de récupération");
+                // Tenter de récupérer la référence
+                speechSynthesisRef.current = window.speechSynthesis;
+                if (speechSynthesisRef.current) {
+                  console.log("Récupération réussie, démarrage de la lecture");
+                  try {
+                    readNextSegment(0);
+                  } catch (e) {
+                    console.error("Erreur au démarrage après récupération:", e);
+                    setIsSpeaking(false);
+                    isSpeakingRef.current = false;
+                    setError("Erreur lors de l'initialisation de la synthèse vocale");
+                  }
+                } else {
+                  console.error("Impossible de récupérer la synthèse vocale");
+                  setIsSpeaking(false);
+                  isSpeakingRef.current = false;
+                  setError("La synthèse vocale n'est plus disponible. Veuillez actualiser la page.");
+                }
+              }
+            }
+          }, 300);
+        } else {
+          // S'il n'y a pas de segments valides (texte vide ou nettoyé en vide)
+          console.log("Aucun segment valide à lire.");
+          setIsSpeaking(false);
+          isSpeakingRef.current = false;
+          setCurrentSpeakingMessageId(null);
+          setSpeakingProgress(100);
+          activeSpeechRef.current.isActive = false;
+        }
+        
+        // Surveiller si la lecture s'arrête de manière inattendue
+        // Nettoyer l'intervalle précédent s'il existe
+        if (checkIntervalRef.current) {
+          console.log("Nettoyage de l'intervalle de vérification précédent");
+          clearInterval(checkIntervalRef.current);
+        }
+        
+        checkIntervalRef.current = setInterval(() => {
+          if (!isSpeakingRef.current || cancelRequestedRef.current) {
+            console.log("Arrêt de la surveillance: plus en mode lecture ou annulation demandée");
+            clearInterval(checkIntervalRef.current);
+            return;
+          }
+          
+          if (!speechSynthesisRef.current.speaking && isSpeakingRef.current && !cancelRequestedRef.current) {
+            console.log("La lecture s'est arrêtée de manière inattendue, tentative de reprise...");
+            console.log("État actuel - speaking:", speechSynthesisRef.current.speaking, "paused:", speechSynthesisRef.current.paused);
+            
+            // Tenter de reprendre la lecture là où elle s'est arrêtée en utilisant la référence de suivi
+            const currentIndex = activeSpeechRef.current.currentSegment;
+            
+            // Vérifier que l'on est bien dans le bon contexte de lecture
+            if (activeSpeechRef.current.isActive && 
+                activeSpeechRef.current.messageId === messageId &&
+                currentIndex < activeSpeechRef.current.totalSegments) {
+              
+              console.log(`Reprise à partir du segment ${currentIndex + 1}/${activeSpeechRef.current.totalSegments}`);
+              speechSynthesisRef.current.cancel(); // Annuler tout ce qui pourrait être en attente
+              
+              // Attendre un court instant avant la reprise
+              setTimeout(() => {
+                if (isSpeakingRef.current && !cancelRequestedRef.current) { // Vérifier encore si toujours en mode lecture
+                  readNextSegment(currentIndex);
+                } else {
+                  console.log("La lecture a été annulée pendant la tentative de reprise");
+                }
+              }, 200);
+            } else {
+              console.log("Impossible de reprendre: références de suivi invalides ou lecture terminée");
+              clearInterval(checkIntervalRef.current);
+            }
+            
+            // Il faut arrêter l'intervalle pour éviter des reprises multiples
+            clearInterval(checkIntervalRef.current);
+          }
+        }, 2000);
+      };
+      
+      // Attendre que les voix soient chargées si nécessaire
+      if (speechSynthesisRef.current.getVoices().length === 0) {
+        // Essayer de forcer le chargement des voix
+        speechSynthesisRef.current.onvoiceschanged = () => {
+          console.log("Voix chargées:", speechSynthesisRef.current.getVoices().length);
+          // Démarrer la lecture par segments une fois les voix chargées
+          readTextInSegments();
+          speechSynthesisRef.current.onvoiceschanged = null;
+        };
+        
+        // Si après 2 secondes les voix ne sont toujours pas chargées, tenter quand même la lecture
+        setTimeout(() => {
+          if (speechSynthesisRef.current.getVoices().length === 0) {
+            console.warn("Impossible de charger les voix, tentative de lecture sans voix spécifique");
+            readTextInSegments();
+          }
+        }, 2000);
+      } else {
+        console.log("Voix disponibles:", speechSynthesisRef.current.getVoices().length);
+        // Voix déjà chargées, démarrer immédiatement
+        readTextInSegments();
+      }
+    } catch (err) {
+      console.error('Erreur lors de la synthèse vocale:', err);
+      setIsSpeaking(false);
+      isSpeakingRef.current = false;
+      setCurrentSpeakingMessageId(null);
+      setSpeakingProgress(0);
+      setError(`Problème de lecture audio: ${err.message || 'erreur inconnue'}. Vérifiez le volume de votre appareil.`);
+    }
+  };
+  
+  // Fonction pour démarrer/arrêter la reconnaissance vocale
+  const startSpeechRecognition = () => {
+    if (!isSpeechRecognitionSupported) {
+      setError('La reconnaissance vocale n\'est pas prise en charge par votre navigateur. Essayez Chrome ou Edge.');
+      return;
+    }
+    
+    // Définir la classe de reconnaissance vocale appropriée
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    
+    if (isListening) {
+      // Arrêter la reconnaissance en cours
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      return;
+    }
+    
+    try {
+      // Créer une nouvelle instance de reconnaissance vocale
+      recognitionRef.current = new SpeechRecognition();
+      
+      // Configurer la reconnaissance
+      recognitionRef.current.lang = 'fr-FR';
+      recognitionRef.current.continuous = false;
+      recognitionRef.current.interimResults = true;
+      
+      // Indiquer à l'utilisateur que l'enregistrement a commencé
+      setError(null); // Effacer les messages d'erreur précédents
+      
+      // Gérer les résultats
+      recognitionRef.current.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        const isFinal = event.results[0].isFinal;
+        
+        // Afficher le texte reconnu uniquement lorsqu'il est finalisé
+        if (isFinal) {
+          // Traiter le texte reconnu (première lettre en majuscule si c'est le début d'un message)
+          let processedText = transcript;
+          if (newMessage.trim() === '') {
+            processedText = transcript.charAt(0).toUpperCase() + transcript.slice(1);
+          }
+          
+          setNewMessage((prev) => {
+            const updatedMessage = prev.trim() === '' ? 
+              processedText : 
+              `${prev} ${processedText}`;
+            return updatedMessage;
+          });
+        }
+      };
+      
+      // Gérer les événements de début et de fin
+      recognitionRef.current.onstart = () => {
+        setIsListening(true);
+      };
+      
+      recognitionRef.current.onend = () => {
+        setIsListening(false);
+      };
+      
+      // Gérer les erreurs
+      recognitionRef.current.onerror = (event) => {
+        console.error('Erreur de reconnaissance vocale:', event);
+        setIsListening(false);
+        
+        // Messages d'erreur plus descriptifs
+        if (event.error === 'no-speech') {
+          setError('Aucune parole détectée. Veuillez parler plus fort ou vérifier votre microphone.');
+        } else if (event.error === 'audio-capture') {
+          setError('Impossible d\'accéder au microphone. Vérifiez les permissions de votre navigateur.');
+        } else if (event.error === 'not-allowed') {
+          setError('L\'accès au microphone a été refusé. Vérifiez les permissions de votre navigateur.');
+        } else {
+          setError(`Erreur lors de la reconnaissance vocale: ${event.error}`);
+        }
+      };
+      
+      // Démarrer la reconnaissance
+      recognitionRef.current.start();
+    } catch (err) {
+      console.error('Erreur lors de l\'initialisation de la reconnaissance vocale:', err);
+      setError(`La reconnaissance vocale n'est pas disponible ou une erreur s'est produite: ${err.message}`);
+    }
+  };
+
+  // Nettoyage lors de l'annulation explicite
+  const cancelSpeech = () => {
+    // Annuler tous les timeouts en attente
+    if (activeSpeechRef.current.timeouts && activeSpeechRef.current.timeouts.length > 0) {
+      activeSpeechRef.current.timeouts.forEach(timeoutId => {
+        clearTimeout(timeoutId);
+      });
+      activeSpeechRef.current.timeouts = [];
+    }
+    
+    // Marquer l'annulation comme intentionnelle avec les deux mécanismes
+    setIsCancellationRequested(true);
+    cancelRequestedRef.current = true;
+    
+    // Nettoyer l'intervalle de vérification
+    if (checkIntervalRef.current) {
+      clearInterval(checkIntervalRef.current);
+      checkIntervalRef.current = null;
+    }
+    
+    // Arrêter la synthèse vocale
+    try {
+      speechSynthesisRef.current.cancel();
+    } catch (err) {
+      console.error("Erreur lors de l'annulation de la synthèse vocale:", err);
+    }
+    
+    // Réinitialiser les états avec les deux mécanismes
+    setIsSpeaking(false);
+    isSpeakingRef.current = false;
+    setCurrentSpeakingMessageId(null);
+    setSpeakingProgress(0);
+    
+    // Réinitialiser la référence
+    activeSpeechRef.current = {
+      isActive: false,
+      messageId: null,
+      segments: [],
+      currentSegment: 0,
+      totalSegments: 0,
+      timeouts: []
+    };
+    
+    // Réinitialiser l'état d'annulation après un délai
+    setTimeout(() => {
+      setIsCancellationRequested(false);
+      cancelRequestedRef.current = false;
+    }, 500);
+  };
+
+  // Ajouter un useEffect pour créer un "watchdog" qui garde la lecture active
+  useEffect(() => {
+    // Ne rien faire si la synthèse vocale n'est pas supportée
+    if (!isSpeechSynthesisSupported) return;
+    
+    // Si on est supposé être en train de lire
+    if (isSpeakingRef.current && !cancelRequestedRef.current) {
+      let watchdogTimer = null;
+      
+      // Mettre en place un watchdog qui vérifie régulièrement l'état de la synthèse vocale
+      const watchdog = () => {
+        if (!isSpeakingRef.current) {
+          // Si la référence indique qu'on ne parle plus, arrêter le watchdog
+          console.log("Watchdog: L'état de parole a changé, arrêt de la surveillance");
+          return;
+        }
+        
+        // Si la synthèse est supposée être active mais ne l'est pas
+        if (activeSpeechRef.current.isActive && !speechSynthesisRef.current.speaking) {
+          // Vérifier s'il s'agit d'une pause normale entre segments
+          const timeSinceLastActivity = Date.now() - (activeSpeechRef.current.lastActivity || 0);
+          console.log(`Watchdog: Vérification d'activité, temps écoulé: ${timeSinceLastActivity}ms`);
+          
+          // Si ça fait plus de 800ms qu'il n'y a pas eu d'activité, c'est anormal
+          if (timeSinceLastActivity > 800) {
+            console.log("Watchdog: Détection d'un arrêt anormal de la synthèse vocale, tentative de reprise");
+            
+            // Récupérer le segment actuel et essayer de le rejouer
+            const currentIndex = activeSpeechRef.current.currentSegment;
+            const totalSegments = activeSpeechRef.current.totalSegments;
+            
+            if (currentIndex < totalSegments) {
+              console.log(`Watchdog: Reprise du segment ${currentIndex + 1}/${totalSegments}`);
+              const segmentToRead = activeSpeechRef.current.segments[currentIndex];
+              
+              // Créer une nouvelle utterance pour ce segment
+              try {
+                const utterance = new SpeechSynthesisUtterance(segmentToRead);
+                utterance.lang = 'fr-FR';
+                utterance.rate = voicePrefs.rate;
+                utterance.volume = 1.0;
+                
+                // Récupérer une voix française si disponible
+                try {
+                  const voices = speechSynthesisRef.current.getVoices();
+                  const frenchVoice = voices.find(voice => voice.lang.includes('fr'));
+                  if (frenchVoice) {
+                    utterance.voice = frenchVoice;
+                  }
+                } catch (e) {
+                  console.warn("Watchdog: Impossible de définir la voix", e);
+                }
+                
+                // Enregistrer l'heure de la dernière activité
+                activeSpeechRef.current.lastActivity = Date.now();
+                
+                // Lire le segment d'urgence
+                speechSynthesisRef.current.cancel(); // Annuler tout ce qui pourrait être en cours
+                speechSynthesisRef.current.speak(utterance);
+              } catch (err) {
+                console.error("Watchdog: Erreur lors de la tentative de reprise", err);
+              }
+            } else {
+              console.log("Watchdog: Tous les segments ont été lus, arrêt de la surveillance");
+              clearInterval(watchdogTimer);
+            }
+          }
+        } else if (speechSynthesisRef.current.speaking) {
+          // Si la synthèse est active, mettre à jour l'heure de la dernière activité
+          activeSpeechRef.current.lastActivity = Date.now();
+        }
+      };
+      
+      // Lancer le watchdog toutes les 500ms
+      watchdogTimer = setInterval(watchdog, 500);
+      
+      // Nettoyer le watchdog quand l'état change
+      return () => {
+        if (watchdogTimer) {
+          clearInterval(watchdogTimer);
+        }
+      };
+    }
+  }, [isSpeakingRef.current, cancelRequestedRef.current, isSpeechSynthesisSupported, voicePrefs.rate]);
+
   return (
     <div className="chat-page d-flex flex-column vh-100">
       <header className="container-fluid py-2 bg-white shadow-sm">
@@ -300,6 +1172,123 @@ const ChatPage = () => {
       <div className="container flex-grow-1 py-4">
         <div className="chat-container p-3 d-flex flex-column mx-auto" style={{ maxWidth: '850px' }}>
           <div className="chat-messages flex-grow-1 overflow-auto p-3 mb-3" style={{ maxHeight: '70vh' }}>
+            {isSpeechSynthesisSupported && (
+              <div className="text-center mb-3">
+                <button 
+                  className="btn btn-sm btn-outline-primary me-2"
+                  onClick={() => {
+                    if (isSpeaking) {
+                      // Utiliser la fonction d'annulation sécurisée
+                      cancelSpeech();
+                    } else {
+                      // Lire le dernier message de l'assistant
+                      const assistantMessages = messages.filter(m => m.role === 'assistant');
+                      if (assistantMessages.length > 0) {
+                        const lastAssistantMessage = assistantMessages[assistantMessages.length - 1];
+                        handleSpeakMessage(lastAssistantMessage.content, lastAssistantMessage.id);
+                      }
+                    }
+                  }}
+                  disabled={!isSpeechSynthesisSupported || messages.filter(m => m.role === 'assistant').length === 0}
+                >
+                  <i className={`fas ${isSpeaking ? 'fa-stop' : 'fa-volume-up'}`}></i>
+                  {' '}{isSpeaking ? 'Arrêter la lecture' : 'Lire dernier message'}
+                </button>
+                
+                <button 
+                  className="btn btn-sm btn-outline-secondary me-2"
+                  onClick={() => setShowVoiceSettings(!showVoiceSettings)}
+                  title="Paramètres de lecture vocale"
+                >
+                  <i className="fas fa-sliders-h"></i>{' '}
+                  Options de lecture
+                </button>
+                
+                <div className="mt-2 small text-muted">
+                  <i className="fas fa-info-circle me-1"></i>
+                  Si la lecture est incomplète, activez le "Mode fiabilité maximale" dans les options
+                </div>
+                
+                {/* Paramètres de lecture vocale */}
+                {showVoiceSettings && (
+                  <div className="voice-settings card p-3 mt-2 text-start">
+                    <h6 className="mb-3"><i className="fas fa-cog me-2"></i>Paramètres de lecture vocale</h6>
+                    
+                    <div className="mb-3">
+                      <label htmlFor="voice-rate" className="form-label d-flex justify-content-between">
+                        <span>Vitesse</span>
+                        <span className="badge bg-primary">
+                          {voicePrefs.rate < 0.8 ? 'Lente' : voicePrefs.rate > 1.1 ? 'Rapide' : 'Normale'}
+                        </span>
+                      </label>
+                      <div className="btn-group w-100" role="group">
+                        <button 
+                          type="button" 
+                          className={`btn btn-sm ${voicePrefs.rate < 0.8 ? 'btn-primary' : 'btn-outline-primary'}`}
+                          onClick={() => setVoicePrefs({...voicePrefs, rate: 0.7})}
+                        >
+                          <i className="fas fa-walking"></i> Lente
+                        </button>
+                        <button 
+                          type="button" 
+                          className={`btn btn-sm ${voicePrefs.rate >= 0.8 && voicePrefs.rate <= 1.1 ? 'btn-primary' : 'btn-outline-primary'}`}
+                          onClick={() => setVoicePrefs({...voicePrefs, rate: 0.9})}
+                        >
+                          <i className="fas fa-running"></i> Normale
+                        </button>
+                        <button 
+                          type="button" 
+                          className={`btn btn-sm ${voicePrefs.rate > 1.1 ? 'btn-primary' : 'btn-outline-primary'}`}
+                          onClick={() => setVoicePrefs({...voicePrefs, rate: 1.2})}
+                        >
+                          <i className="fas fa-bicycle"></i> Rapide
+                        </button>
+                      </div>
+                    </div>
+                    
+                    <div className="form-check form-switch mb-4">
+                      <input 
+                        className="form-check-input" 
+                        type="checkbox" 
+                        id="segmentation-switch" 
+                        checked={voicePrefs.useSegmentation}
+                        onChange={(e) => setVoicePrefs({...voicePrefs, useSegmentation: e.target.checked})}
+                      />
+                      <label className="form-check-label" htmlFor="segmentation-switch">
+                        <strong>Mode fiabilité maximale</strong>
+                        <span className="d-block small text-muted">
+                          Recommandé pour les longs textes ou si la lecture est incomplète
+                        </span>
+                      </label>
+                    </div>
+                    
+                    <div className="text-center">
+                      <button 
+                        className="btn btn-outline-secondary btn-sm me-2"
+                        onClick={() => {
+                          setVoicePrefs({
+                            rate: 0.9,
+                            pitch: 1.0,
+                            volume: 1.0,
+                            useSegmentation: true
+                          });
+                        }}
+                      >
+                        <i className="fas fa-undo me-1"></i> Réinitialiser
+                      </button>
+                      
+                      <button 
+                        className="btn btn-primary btn-sm"
+                        onClick={() => setShowVoiceSettings(false)}
+                      >
+                        <i className="fas fa-check me-1"></i> Appliquer
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            
             {messages
               .filter(message => message.role !== 'system')
               .map((message) => (
@@ -319,7 +1308,7 @@ const ChatPage = () => {
                       message.role === 'user' 
                         ? 'bg-primary text-white' 
                         : 'bg-light border'
-                    }`}
+                    } ${currentSpeakingMessageId === message.id ? 'currently-speaking' : ''}`}
                     style={{ maxWidth: '80%' }}
                   >
                     {message.image && (
@@ -354,12 +1343,94 @@ const ChatPage = () => {
                       }}
                     />
                     
-                    <div 
-                      className={`message-time small ${
-                        message.role === 'user' ? 'text-light' : 'text-muted'
-                      } mt-1`}
-                    >
-                      {message.timestamp}
+                    {/* Afficher la barre de progression si le message est en cours de lecture */}
+                    {currentSpeakingMessageId === message.id && (
+                      <div className="speech-progress mt-2">
+                        <div className="progress" style={{ height: '4px' }}>
+                          <div 
+                            className="progress-bar bg-accent" 
+                            role="progressbar" 
+                            style={{ width: `${speakingProgress}%` }} 
+                            aria-valuenow={speakingProgress} 
+                            aria-valuemin="0" 
+                            aria-valuemax="100"
+                          ></div>
+                        </div>
+                        <div className="speech-status text-center mt-1 small">
+                          <i className="fas fa-volume-up me-1"></i> 
+                          {speakingProgress < 100 ? (
+                            <>Lecture en cours... <span className="badge bg-secondary">{speakingProgress}%</span></>
+                          ) : (
+                            <>Lecture terminée</>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    
+                    <div className="d-flex justify-content-between align-items-center mt-2">
+                  <div 
+                    className={`message-time small ${
+                          message.role === 'user' ? 'text-light' : 'text-muted'
+                        }`}
+                  >
+                    {message.timestamp}
+                        {currentSpeakingMessageId === message.id && (
+                          <span className="ms-2 speaking-indicator">
+                            <i className="fas fa-volume-up fa-pulse"></i>
+                            {speakingProgress > 0 && speakingProgress < 100 && (
+                              <span className="ms-1">{speakingProgress}%</span>
+                            )}
+                          </span>
+                        )}
+                      </div>
+                      
+                      {/* Bouton pour lire le message à haute voix (uniquement pour les messages de l'assistant) */}
+                      {message.role === 'assistant' && message.content && (
+                        <div className="message-actions">
+                          <button 
+                            className={`btn btn-sm ${isSpeaking && currentSpeakingMessageId === message.id ? 'btn-danger' : 'btn-outline-secondary'}`}
+                            onClick={() => {
+                              if (isSpeaking && currentSpeakingMessageId === message.id) {
+                                cancelSpeech();
+                              } else {
+                                handleSpeakMessage(message.content, message.id);
+                              }
+                            }}
+                            title={isSpeechSynthesisSupported ? (isSpeaking && currentSpeakingMessageId === message.id ? "Arrêter la lecture" : "Lire à haute voix") : "Synthèse vocale non supportée"}
+                            disabled={!isSpeechSynthesisSupported || (isSpeaking && currentSpeakingMessageId !== message.id)}
+                          >
+                            <i className={`fas ${isSpeaking && currentSpeakingMessageId === message.id ? 'fa-stop' : 'fa-volume-up'}`}></i>
+                          </button>
+                          
+                          {/* Petits boutons pour la vitesse de lecture rapide */}
+                          {!isSpeaking && (
+                            <div className="btn-group btn-group-sm ms-2">
+                              <button 
+                                className="btn btn-outline-secondary btn-xs"
+                                onClick={() => {
+                                  setVoicePrefs({...voicePrefs, rate: 0.7});
+                                  handleSpeakMessage(message.content, message.id);
+                                }}
+                                disabled={!isSpeechSynthesisSupported}
+                                title="Lecture lente"
+                              >
+                                <i className="fas fa-walking"></i>
+                              </button>
+                              <button 
+                                className="btn btn-outline-secondary btn-xs"
+                                onClick={() => {
+                                  setVoicePrefs({...voicePrefs, rate: 1.2});
+                                  handleSpeakMessage(message.content, message.id);
+                                }}
+                                disabled={!isSpeechSynthesisSupported}
+                                title="Lecture rapide"
+                              >
+                                <i className="fas fa-running"></i>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                   {message.role === 'user' && (
@@ -430,18 +1501,30 @@ const ChatPage = () => {
               >
                 <i className="fas fa-image"></i>
               </button>
+              
+              {/* Bouton pour activer/désactiver la reconnaissance vocale */}
+              <button
+                type="button"
+                className={`btn ${isListening ? 'btn-danger' : 'btn-outline-secondary'} btn-mic`}
+                onClick={startSpeechRecognition}
+                title={isSpeechRecognitionSupported ? (isListening ? "Arrêter l'enregistrement" : "Enregistrer un message vocal") : "Reconnaissance vocale non supportée"}
+                disabled={isLoading || !isSpeechRecognitionSupported}
+              >
+                <i className={`fas ${isListening ? 'fa-stop' : 'fa-microphone'}`}></i>
+              </button>
+              
               <input
                 type="text"
                 className="form-control"
                 placeholder="Écris ton message ici..."
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
-                disabled={isLoading}
+                disabled={isLoading || isListening}
               />
               <button 
                 type="submit" 
                 className="btn btn-primary"
-                disabled={(newMessage.trim() === '' && !selectedImage) || isLoading}
+                disabled={(newMessage.trim() === '' && !selectedImage) || isLoading || isListening}
               >
                 {isLoading ? (
                   <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
@@ -467,7 +1550,7 @@ const ChatPage = () => {
           <div className="card p-3 border-0 shadow-sm">
             <p className="text-muted small mb-0">
               <i className="fas fa-lightbulb me-2 text-warning"></i>
-              <strong>Conseil :</strong> Tu peux joindre une image à ton message en cliquant sur l'icône <i className="fas fa-image"></i>.
+              <strong>Conseil :</strong> Tu peux joindre une image à ton message avec <i className="fas fa-image"></i>, parler avec <i className="fas fa-microphone"></i> ou écouter les réponses avec <i className="fas fa-volume-up"></i>.
             </p>
           </div>
         </div>
