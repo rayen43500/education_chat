@@ -1,6 +1,62 @@
-# Getting Started with Create React App
+# ChatAlimi - Educational AI Chat Assistant
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+ChatAlimi is an educational AI assistant designed to help students improve their written productions. It provides feedback, suggestions, and guidance in French to help students enhance their writing skills.
+
+## Features
+
+- **Interactive Chat Interface**: Engage in real-time conversations with an AI tutor
+- **Image Support**: Upload and analyze images for feedback
+- **Multi-language Support**: Toggle between French and Arabic interface
+- **Text Formatting**: Displays bold, italic, and underlined text for emphasis
+- **Responsive Design**: Works on desktop and mobile devices
+
+## Technical Implementation
+
+- React-based frontend with React Router for navigation
+- Azure AI Inference SDK for connecting to AI models
+- Support for multimodal interactions (text and images)
+- Responsive design using Bootstrap
+
+## Image Handling
+
+The application supports both sending and receiving images:
+
+### Sending Images
+- Users can upload images up to 5MB in size
+- Supported formats: JPG, PNG, GIF, WEBP
+- Images are converted to base64 format before sending to the API
+
+### Receiving Images
+- The AI can respond with images to illustrate concepts
+- Images are displayed inline with text responses
+- The application processes multimodal responses in this format:
+
+```json
+[
+  {
+    "type": "text",
+    "text": "Here is some text explanation"
+  },
+  {
+    "type": "image_url",
+    "image_url": {
+      "url": "data:image/jpeg;base64,..."
+    }
+  }
+]
+```
+
+## Browser Compatibility
+
+For best results, use one of these browsers:
+- Chrome/Chromium
+- Firefox
+- Edge
+- Safari (limited image upload support)
+
+## Setup Instructions
+
+This project uses the Azure AI Inference SDK with GitHub's model API. You'll need to set up a GitHub token to use it.
 
 ## Available Scripts
 
@@ -39,6 +95,18 @@ Instead, it will copy all the configuration files and the transitive dependencie
 
 You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
 
+## License
+
+This project is proprietary and intended for educational purposes.
+
+## Credits
+
+Developed for the Tunisian Ministry of Education.
+
+# Getting Started with Create React App
+
+This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+
 ## Learn More
 
 You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
@@ -68,3 +136,50 @@ This section has moved here: [https://facebook.github.io/create-react-app/docs/d
 ### `npm run build` fails to minify
 
 This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+
+## Azure AI Chat Integration
+
+This project now integrates with the Azure AI Inference SDK to provide intelligent chat responses using GitHub's AI models.
+
+### Setting up GitHub Token
+
+To use the chat functionality, you'll need to create a personal access token (PAT) in your GitHub settings:
+
+1. Go to your GitHub settings -> Developer settings -> Personal access tokens -> Fine-grained tokens
+2. Click "Generate new token"
+3. Give it a name and set the expiration
+4. For Repository access, select "Public repositories (read-only)"
+5. Under Permissions, select "models:read" - this is required for the AI model access
+6. Generate the token and copy it
+
+### Environment Variables
+
+Create a `.env.local` file in the root of your project with the following content:
+
+```
+REACT_APP_GITHUB_TOKEN=your_github_token_here
+```
+
+Replace `your_github_token_here` with the token you generated.
+
+### Alternative: Use in Development
+
+Alternatively, you can set the environment variable directly in your terminal:
+
+**Bash:**
+```bash
+export REACT_APP_GITHUB_TOKEN="your-github-token-here"
+npm start
+```
+
+**PowerShell:**
+```powershell
+$Env:REACT_APP_GITHUB_TOKEN="your-github-token-here"
+npm start
+```
+
+**Windows Command Prompt:**
+```cmd
+set REACT_APP_GITHUB_TOKEN=your-github-token-here
+npm start
+```

@@ -1,0 +1,54 @@
+[
+  {
+    "timestamp": "2025-05-06T10:14:23.698Z",
+    "role": "user",
+    "message": [
+      {
+        "type": "text",
+        "text": "Bonjour! Pouvez-vous m'aider à améliorer mon écriture?"
+      }
+    ]
+  },
+  {
+    "timestamp": "2025-05-06T10:14:30.123Z",
+    "role": "assistant",
+    "message": [
+      {
+        "type": "text",
+        "text": "Bonjour! Je serais ravi de t'aider à améliorer ton écriture. Voici quelques **conseils** pour commencer:\n\n1. Lis régulièrement\n2. Écris tous les jours\n3. Révise tes textes\n\n_N'hésite pas à me partager un texte que tu aimerais améliorer!_"
+      }
+    ]
+  },
+  {
+    "timestamp": "2025-05-06T10:15:10.456Z",
+    "role": "user",
+    "message": [
+      {
+        "type": "text",
+        "text": "Voici mon dessin. Qu'en pensez-vous?"
+      },
+      {
+        "type": "image_url",
+        "image_url": {
+          "url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAUDBBAQDw4PEA8PEBAOEBAPEA8QEA4NEA0QDxANEBAQEA0NDRANDRAQEA0NDRUNDhERExMTDQ0WGBYSGBASExIBBQUFCAcIDwkJDxIPDw8SEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhUVEhUVFRUVFf/AABEIAeACgAMBIgACEQEDEQH/xAAcAAABBQEBAQAAAAAAAAAAAAAAAgMEBQYBCAf/xABVEAACAQIEBAQCBQkGAwQGCQUBAhEAAwQSITEFIkFRBhNhcTKBFCNCkaEIGFJkpLHB5PgzYtFy4fE0U4KSQ1SClLTEFkRjc6Kj0tTjk7PCw+L/xAAZAQEBAQEBAQAAAAAAAAAAAAAAAQIDBAX..."
+        }
+      }
+    ]
+  },
+  {
+    "timestamp": "2025-05-06T10:15:45.789Z",
+    "role": "assistant",
+    "message": [
+      {
+        "type": "text",
+        "text": "Ton dessin est très créatif! J'aime beaucoup les couleurs que tu as utilisées. Voici quelques **conseils** pour l'améliorer:\n\n1. Essaie d'ajouter plus de détails aux personnages\n2. Travaille sur les proportions\n\nRegarde cette exemple que j'ai préparé pour t'aider:"
+      },
+      {
+        "type": "image_url",
+        "image_url": {
+          "url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAUDBBAQDw4PEA8PEBAOEBAPEA8QEA4NEA0QDxANEBAQEA0NDRANDRAQEA0NDRUNDhERExMTDQ0WGBYSGBASExIBBQUFCAcIDwkJDxIPDw8SEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhUVEhUVFRUVFf/AABEIAeACgAMBIgACEQEDEQH/xAAcAAABBQEBAQAAAAAAAAAAAAAAAgMEBQYBCAf..."
+        }
+      }
+    ]
+  }
+] 
